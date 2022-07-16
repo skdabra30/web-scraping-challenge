@@ -3,80 +3,100 @@ from bs4 import BeautifulSoup as bs
 import pandas as pd
 import requests
 from splinter import Browser
-from webdriver_manager.firefox import GeckoDriverManager
+from webdriver_manager.chrome import ChromeDriverManager
+import datetime as dt
 
 def scrape():
     
     executable_path = {'executable_path': ChromeDriverManager().install()}
     browser = Browser('chrome', **executable_path, headless=False)
-    
-    # NASA Mars News 
-    url = "https://redplanetscience.com/"
+
+    news_title, news_paragraph = mars_news(browser)
+    hemisphere_image_urls = mars_hemis(browser)
+
+    data = {
+        "news_title": news_title,
+        "news_paragraph": news_paragraph,
+        "featured_image_url": featured_image(browser),
+        "mars_facts": mars_facts(),
+        "hemispheres": hemisphere_image_urls,
+        "last_modified": dt.datetime.now()
+    }
+    browser.quit()
+    return data
+
+
+def mars_news(browser):
+    url = 'https://redplanetscience.com/'
     browser.visit(url)
-    html=browser.html
-    soup = bs(html, "html.parser")
-    news_title = soup.body.find("div", class_="content_title").text.strip()
-    news_p = soup.body.find("div", class_="article_teaser_body").text.strip()
 
-    # JPL Mars Space Images - Featured Image 
+    browser.is_element_present_by_css('div.list_text', wait_time=1)
 
-    url = "https://spaceimages-mars.com/"
+    html = browser.html
+    news_soup = bs(html, 'html.parser')
+
+    try:
+        site_elem = news_soup.select_one('div.list_text')
+        news_title = site_elem.find("div", class_='content_title').get_text()
+        news_p = site_elem.find('div', class_='article_teaser_body').get_text()
+
+    except AttributeError:
+        return None, None
+
+    return news_title, news_p
+
+
+def featured_image(browser):
+    url = 'https://spaceimages-mars.com'
     browser.visit(url)
+
+    full_image_btn = browser.find_by_tag('button')[1]
+    full_image_btn.click()
+
     html = browser.html
-    soup = bs(html, "html.parser")
-    featured_image = soup.body.find("img", class_="headerimage")["src"]
-    featured_image_url = url + featured_image
+    mars_img_soup = bs(html, 'html.parser')
 
-    # Mars Facts
+    try:
+        mars_img_rel_url = mars_img_soup.find('img', class_='fancybox-image').get('src')
+    except AttributeError:
+        return None
 
-    url = "https://galaxyfacts-mars.com/"
-    mars_facts = pd.read_html(url)
-    mars_facts_df = mars_facts[0]
-    mars_facts_df.columns = mars_facts_df.iloc[0]
-    mars_facts_df = mars_facts_df.drop(mars_facts[0].index[0])
-    mars_facts_df = mars_facts_df.set_index("Mars - Earth Comparison")
-    mars_facts_html = mars_facts_df.to_html(classes="table table-striped table-dark")
+    featured_image_url = f'https://spaceimages-mars.com/{mars_img_rel_url}'
+    return featured_image_url
 
-    # Mars Hemispheres 
-    base_url = "https://marshemispheres.com/"
-    browser.visit(base_url)
-    html = browser.html
-    soup = bs(html, "html.parser")
-    div_list = soup.body.find_all("div", class_="description")
-    sites = []
+def mars_facts():
+    try:
+        mars_facts_df = pd.read_html('https://galaxyfacts-mars.com')[0]
+    except BaseException:
+        return None
 
-    for div in div_list:
-        
-        site = div.find("a", class_="product-item")["href"]
-        sites.append(site)
+    mars_facts_df.columns=['Description', 'Mars', 'Earth']
+    mars_facts_df.set_index('Description', inplace=True)
+
+    return mars_facts_df.to_html()
+
+
+def mars_hemis(browser):
+    url = 'https://marshemispheres.com/'
+    browser.visit(url)
 
     hemisphere_image_urls = []
 
-    for site in sites:
-        try:
-            url = base_url + site
-            browser.visit(url)
-            html = browser.html
-            soup = bs(html, "html.parser")
-            img_url_ending = soup.body.find("img", class_="wide-image")["src"]
-            img_url = base_url + img_url_ending
-            title = soup.body.find("h2", class_="title").text.strip()[:-9]
-            hemisphere_image_urls.append({"title": title, "img_url": img_url})
-        except Exception as e:
-            print(e)
+    for hemi in range(4): 
+        browser.links.find_by_partial_text('Hemisphere')[hemi].click()  
+    
+        html = browser.html
+        hemisphere_soup = bs(html, 'html.parser')
+    
+        title = hemisphere_soup.find('h2', class_='title').text
+        img_url = hemisphere_soup.find('li').a.get('href')
+    
+        hemispheres = {}
+        hemispheres['img_url'] = f'https://marshemispheres.com/{img_url}'
+        hemispheres['title'] = title
+        hemisphere_image_urls.append(hemispheres)
+        browser.back()
+    return hemisphere_image_urls
 
-
-    browser.quit()
-
-
-    # Create dictionary
-
-    scraped_data = {
-        "NewsTitle": news_title,
-        "NewsParagraph": news_p,
-        "FeaturedImage": featured_image_url,
-        "MarsFactsTable": mars_facts_html, 
-        "HemisphereImages": hemisphere_image_urls
-    }
-
-    return scraped_data
+if __name__=="__main__":
+    print(scrape())
